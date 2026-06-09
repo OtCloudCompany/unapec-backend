@@ -37,6 +37,7 @@ public interface RestModel extends Serializable {
     public static final String TOOLS = "tools";
     public static final String LDN = "ldn";
     public static final String PID = "pid";
+    public static final String OTCLOUD_STATS = "otcloud-stats";
 
     public String getType();
 
