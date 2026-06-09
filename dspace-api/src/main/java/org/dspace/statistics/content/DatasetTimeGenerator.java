@@ -68,26 +68,35 @@ public class DatasetTimeGenerator extends DatasetGenerator {
         // have visits from the future.
         //Depending on our dateType check if we need to use days/months/years.
         ChronoUnit typeChronoUnit = ChronoUnit.DAYS;
+        LocalDateTime nowUnit = LocalDateTime.now().truncatedTo(ChronoUnit.DAYS);
+        LocalDateTime targetStart = start.truncatedTo(ChronoUnit.DAYS);
+        LocalDateTime targetEnd = end.truncatedTo(ChronoUnit.DAYS);
+
         if ("year".equalsIgnoreCase(dateType)) {
             typeChronoUnit = ChronoUnit.YEARS;
+            nowUnit = nowUnit.withDayOfYear(1);
+            targetStart = targetStart.withDayOfYear(1);
+            targetEnd = targetEnd.withDayOfYear(1).plus(1, ChronoUnit.YEARS);
         } else if ("month".equalsIgnoreCase(dateType)) {
             typeChronoUnit = ChronoUnit.MONTHS;
+            nowUnit = nowUnit.withDayOfMonth(1);
+            targetStart = targetStart.withDayOfMonth(1);
+            targetEnd = targetEnd.withDayOfMonth(1).plus(1, ChronoUnit.MONTHS);
         } else if ("day".equalsIgnoreCase(dateType)) {
             typeChronoUnit = ChronoUnit.DAYS;
+            targetEnd = targetEnd.plus(1, ChronoUnit.DAYS);
         } else if ("hour".equalsIgnoreCase(dateType)) {
             typeChronoUnit = ChronoUnit.HOURS;
+            nowUnit = LocalDateTime.now().truncatedTo(ChronoUnit.HOURS);
+            targetStart = start.truncatedTo(ChronoUnit.HOURS);
+            targetEnd = end.plus(1, ChronoUnit.HOURS).truncatedTo(ChronoUnit.HOURS);
         }
 
-        long difStart = typeChronoUnit.between(start, LocalDateTime.now());
-        long difEnd = typeChronoUnit.between(end, LocalDateTime.now());
+        long difStart = typeChronoUnit.between(targetStart, nowUnit);
+        long difEnd = typeChronoUnit.between(targetEnd, nowUnit);
 
         startDate = (difStart >= 0 ? "-" : "+") + Math.abs(difStart);
-        // We need to ensure the end date is inclusive of the end month/day/etc.
-        // If difEnd is 0 (this unit), we want to go until the start of NEXT unit (+1)
-        // If difEnd is positive (past unit), we want to go until the start of the unit AFTER it.
-        // For example, if end is last month (difEnd=1), we want until start of this month (NOW/MONTH-0MONTHS)
-        long adjustedDifEnd = difEnd - 1;
-        endDate = (adjustedDifEnd >= 0 ? "-" : "+") + Math.abs(adjustedDifEnd);
+        endDate = (difEnd >= 0 ? "-" : "+") + Math.abs(difEnd);
     }
 
     public String getStartDate() {
