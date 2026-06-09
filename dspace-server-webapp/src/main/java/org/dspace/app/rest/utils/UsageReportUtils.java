@@ -66,25 +66,41 @@ public class UsageReportUtils {
      *
      * @param context   DSpace context
      * @param dso       DSpaceObject we want all available usage reports of
+     * @param startDate Start date of the range
+     * @param endDate   End date of the range
+     * @return List of usage reports, applicable to the given DSO
+     */
+    public List<UsageReportRest> getUsageReportsOfDSO(Context context, DSpaceObject dso,
+                                                     LocalDateTime startDate, LocalDateTime endDate)
+        throws SQLException, ParseException, SolrServerException, IOException {
+        List<UsageReportRest> usageReports = new ArrayList<>();
+        if (dso instanceof Site) {
+            UsageReportRest globalUsageStats = this.resolveGlobalUsageReport(context, startDate, endDate);
+            globalUsageStats.setId(dso.getID().toString() + "_" + TOTAL_VISITS_REPORT_ID);
+            usageReports.add(globalUsageStats);
+        } else {
+            usageReports.add(this.createUsageReport(context, dso, TOTAL_VISITS_REPORT_ID, startDate, endDate));
+            usageReports.add(this.createUsageReport(context, dso, TOTAL_VISITS_PER_MONTH_REPORT_ID,
+                                                    startDate, endDate));
+            usageReports.add(this.createUsageReport(context, dso, TOP_COUNTRIES_REPORT_ID, startDate, endDate));
+            usageReports.add(this.createUsageReport(context, dso, TOP_CITIES_REPORT_ID, startDate, endDate));
+        }
+        if (dso instanceof Item || dso instanceof Bitstream) {
+            usageReports.add(this.createUsageReport(context, dso, TOTAL_DOWNLOADS_REPORT_ID, startDate, endDate));
+        }
+        return usageReports;
+    }
+
+    /**
+     * Get list of usage reports that are applicable to the DSO (of given UUID)
+     *
+     * @param context   DSpace context
+     * @param dso       DSpaceObject we want all available usage reports of
      * @return List of usage reports, applicable to the given DSO
      */
     public List<UsageReportRest> getUsageReportsOfDSO(Context context, DSpaceObject dso)
         throws SQLException, ParseException, SolrServerException, IOException {
-        List<UsageReportRest> usageReports = new ArrayList<>();
-        if (dso instanceof Site) {
-            UsageReportRest globalUsageStats = this.resolveGlobalUsageReport(context);
-            globalUsageStats.setId(dso.getID().toString() + "_" + TOTAL_VISITS_REPORT_ID);
-            usageReports.add(globalUsageStats);
-        } else {
-            usageReports.add(this.createUsageReport(context, dso, TOTAL_VISITS_REPORT_ID));
-            usageReports.add(this.createUsageReport(context, dso, TOTAL_VISITS_PER_MONTH_REPORT_ID));
-            usageReports.add(this.createUsageReport(context, dso, TOP_COUNTRIES_REPORT_ID));
-            usageReports.add(this.createUsageReport(context, dso, TOP_CITIES_REPORT_ID));
-        }
-        if (dso instanceof Item || dso instanceof Bitstream) {
-            usageReports.add(this.createUsageReport(context, dso, TOTAL_DOWNLOADS_REPORT_ID));
-        }
-        return usageReports;
+        return getUsageReportsOfDSO(context, dso, null, null);
     }
 
     /**
@@ -143,9 +159,11 @@ public class UsageReportUtils {
      * Create stat usage report of the items most popular over entire site
      *
      * @param context DSpace context
+     * @param startDate Start date of the range
+     * @param endDate   End date of the range
      * @return Usage report with top most popular items
      */
-    private UsageReportRest resolveGlobalUsageReport(Context context)
+    private UsageReportRest resolveGlobalUsageReport(Context context, LocalDateTime startDate, LocalDateTime endDate)
         throws SQLException, IOException, ParseException, SolrServerException {
         int topItemsLimit = configurationService.getIntProperty("usage-statistics.topItemsLimit", 10);
 
@@ -156,6 +174,8 @@ public class UsageReportUtils {
         DatasetDSpaceObjectGenerator dsoAxis = new DatasetDSpaceObjectGenerator();
         dsoAxis.addDsoChild(Constants.ITEM, topItemsLimit, false, -1);
         statListing.addDatasetGenerator(dsoAxis);
+
+        addDateFilter(statListing, startDate, endDate);
 
         Dataset dataset = statListing.getDataset(context, 1);
 

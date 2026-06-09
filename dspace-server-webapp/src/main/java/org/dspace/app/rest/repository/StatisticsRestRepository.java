@@ -82,6 +82,8 @@ public class StatisticsRestRepository extends DSpaceRestRepository<UsageReportRe
     @PreAuthorize("hasPermission(#uri, 'usagereportsearch', 'READ')")
     @SearchRestMethod(name = "object")
     public Page<UsageReportRest> findByObject(@Parameter(value = "uri", required = true) String uri,
+                                              @Parameter(value = "startDate") String startDateString,
+                                              @Parameter(value = "endDate") String endDateString,
                                               Pageable pageable) {
         UUID uuid = UUID.fromString(StringUtils.substringAfterLast(uri, "/"));
         List<UsageReportRest> usageReportsOfItem = null;
@@ -91,7 +93,12 @@ public class StatisticsRestRepository extends DSpaceRestRepository<UsageReportRe
             if (dso == null) {
                 throw new ResourceNotFoundException("No DSO found with uuid: " + uuid);
             }
-            usageReportsOfItem = usageReportUtils.getUsageReportsOfDSO(context, dso);
+            LocalDateTime startDate = parseDate(startDateString, false);
+            LocalDateTime endDate = parseDate(endDateString, true);
+            if ((startDate != null && endDate == null) || (startDate == null && endDate != null)) {
+                throw new DSpaceBadRequestException("Both startDate and endDate parameters must be provided together");
+            }
+            usageReportsOfItem = usageReportUtils.getUsageReportsOfDSO(context, dso, startDate, endDate);
         } catch (SQLException | ParseException | SolrServerException | IOException e) {
             throw new RuntimeException(e.getMessage(), e);
         }
