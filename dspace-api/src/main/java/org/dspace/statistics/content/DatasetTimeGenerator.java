@@ -80,22 +80,14 @@ public class DatasetTimeGenerator extends DatasetGenerator {
 
         long difStart = typeChronoUnit.between(start, LocalDateTime.now());
         long difEnd = typeChronoUnit.between(end, LocalDateTime.now());
-//        System.out.println(difStart + " " + difEnd);
 
-        boolean endPos = false;
-        if (difEnd == 0) {
-            //Includes the current
-            difEnd = 1;
-            endPos = true;
-        } else if (0 < difEnd) {
-            endPos = true;
-        } else {
-            difEnd++;
-        }
-
-        startDate = "" + difStart;
-        //We need +1 so we can count the current month/year/...
-        endDate = (endPos ? "+" : "") + difEnd;
+        startDate = (difStart >= 0 ? "-" : "+") + Math.abs(difStart);
+        // We need to ensure the end date is inclusive of the end month/day/etc.
+        // If difEnd is 0 (this unit), we want to go until the start of NEXT unit (+1)
+        // If difEnd is positive (past unit), we want to go until the start of the unit AFTER it.
+        // For example, if end is last month (difEnd=1), we want until start of this month (NOW/MONTH-0MONTHS)
+        long adjustedDifEnd = difEnd - 1;
+        endDate = (adjustedDifEnd >= 0 ? "-" : "+") + Math.abs(adjustedDifEnd);
     }
 
     public String getStartDate() {
