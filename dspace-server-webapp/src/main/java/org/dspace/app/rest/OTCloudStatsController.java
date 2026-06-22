@@ -120,9 +120,9 @@ public class OTCloudStatsController implements InitializingBean {
             LocalDateTime endDate = parseDate(endDateStr);
 
             List<ItemStatsRest> stats = fetchTopItemsStats(context, dso, startDate, endDate, pageable);
+            long total = countTotalTopItems(context, dso, startDate, endDate);
 
-            // For simplicity, we use stats.size() as total, in a real scenario we might need a separate count query
-            return new PageImpl<>(stats, pageable, stats.size()).map(s -> (ItemStatsResource) converter.toResource(s));
+            return new PageImpl<>(stats, pageable, total).map(s -> (ItemStatsResource) converter.toResource(s));
 
         } catch (SQLException | SolrServerException | IOException | ParseException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage(), e);
@@ -163,7 +163,7 @@ public class OTCloudStatsController implements InitializingBean {
         solrQuery.addFilterQuery("statistics_type:" + SolrLoggerServiceImpl.StatisticsType.VIEW.text());
 
         QueryResponse response = solrLoggerService.query(solrQuery.getQuery(), solrQuery.getFilterQueries()[0],
-                "id", 0, pageable.getPageSize(), null, null, null, null, null, false, 1, true);
+                "id", 0, pageable.getPageSize(), (int) pageable.getOffset(), null, null, null, null, null, false, 1);
 
         List<ItemStatsRest> results = new ArrayList<>();
         FacetField idFacet = response.getFacetField("id");
@@ -185,6 +185,43 @@ public class OTCloudStatsController implements InitializingBean {
         }
 
         return results;
+    }
+
+    private long countTotalTopItems(Context context, DSpaceObject container,
+                                    LocalDateTime startDate, LocalDateTime endDate)
+            throws SolrServerException, IOException, SQLException {
+
+        SolrQuery solrQuery = new SolrQuery();
+        solrQuery.setQuery("*:*");
+        solrQuery.setRows(0);
+        solrQuery.setFacet(true);
+        solrQuery.setFacetMinCount(1);
+        solrQuery.addFacetField("id");
+
+        String filterQuery = "";
+        if (container instanceof Community) {
+            filterQuery = "owningComm:" + container.getID();
+        } else {
+            filterQuery = "owningColl:" + container.getID();
+        }
+        filterQuery += " AND type:" + Constants.ITEM;
+
+        if (startDate != null && endDate != null) {
+            DateTimeFormatter formatter = DateTimeFormatter.ISO_INSTANT;
+            String start = formatter.format(startDate.toInstant(ZoneOffset.UTC));
+            String end = formatter.format(endDate.toInstant(ZoneOffset.UTC));
+            filterQuery += " AND time:[" + start + " TO " + end + "]";
+        }
+
+        solrQuery.addFilterQuery(filterQuery);
+        solrQuery.addFilterQuery("statistics_type:" + SolrLoggerServiceImpl.StatisticsType.VIEW.text());
+
+        // Fetch up to a large limit (e.g. 1000000) to find the total number of facet values
+        QueryResponse response = solrLoggerService.query(solrQuery.getQuery(), solrQuery.getFilterQueries()[0],
+                "id", 0, 1000000, 0, null, null, null, null, null, false, 1);
+
+        FacetField idFacet = response.getFacetField("id");
+        return idFacet != null ? idFacet.getValueCount() : 0;
     }
 
     private int fetchDownloadsForItem(UUID itemUuid, LocalDateTime startDate, LocalDateTime endDate)

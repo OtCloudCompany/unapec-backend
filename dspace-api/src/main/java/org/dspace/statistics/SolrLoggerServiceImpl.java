@@ -1029,12 +1029,30 @@ public class SolrLoggerServiceImpl implements SolrLoggerService, InitializingBea
                                boolean ascending, int facetMinCount)
             throws SolrServerException, IOException {
 
-        return query(query, filterQuery, facetField, rows, max, dateType, dateStart, dateEnd, facetQueries, sort,
+        return query(query, filterQuery, facetField, rows, max, 0, dateType, dateStart, dateEnd, facetQueries, sort,
+                ascending, facetMinCount, true);
+    }
+
+    @Override
+    public QueryResponse query(String query, String filterQuery, String facetField, int rows, int max, int facetOffset, String dateType,
+                               String dateStart, String dateEnd, List<String> facetQueries, String sort,
+                               boolean ascending, int facetMinCount)
+            throws SolrServerException, IOException {
+
+        return query(query, filterQuery, facetField, rows, max, facetOffset, dateType, dateStart, dateEnd, facetQueries, sort,
                 ascending, facetMinCount, true);
     }
 
     @Override
     public QueryResponse query(String query, String filterQuery, String facetField, int rows, int max, String dateType,
+                               String dateStart, String dateEnd, List<String> facetQueries, String sort,
+                               boolean ascending, int facetMinCount, boolean defaultFilterQueries)
+            throws SolrServerException, IOException {
+        return query(query, filterQuery, facetField, rows, max, 0, dateType, dateStart, dateEnd, facetQueries, sort,
+                ascending, facetMinCount, defaultFilterQueries);
+    }
+
+    public QueryResponse query(String query, String filterQuery, String facetField, int rows, int max, int facetOffset, String dateType,
                                String dateStart, String dateEnd, List<String> facetQueries, String sort,
                                boolean ascending, int facetMinCount, boolean defaultFilterQueries)
             throws SolrServerException, IOException {
@@ -1078,6 +1096,10 @@ public class SolrLoggerServiceImpl implements SolrLoggerService, InitializingBea
         // Set the top x of if present
         if (max != -1) {
             solrQuery.setFacetLimit(max);
+        }
+
+        if (facetOffset > 0) {
+            solrQuery.setParam("facet.offset", String.valueOf(facetOffset));
         }
 
         // A filter is used instead of a regular query to improve

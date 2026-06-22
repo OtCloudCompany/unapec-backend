@@ -234,6 +234,12 @@ public interface SolrLoggerService {
                                int facetMinCount)
         throws SolrServerException, IOException;
 
+    public QueryResponse query(String query, String filterQuery,
+                               String facetField, int rows, int max, int facetOffset, String dateType, String dateStart,
+                               String dateEnd, List<String> facetQueries, String sort, boolean ascending,
+                               int facetMinCount)
+        throws SolrServerException, IOException;
+
     /**
      * Perform a solr query.
      *
