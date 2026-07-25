@@ -9,7 +9,7 @@ package org.dspace.app.rest;
 
 import java.io.IOException;
 import java.sql.SQLException;
-import java.text.ParseException;
+import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneOffset;
 import java.time.format.DateTimeFormatter;
@@ -21,30 +21,28 @@ import java.util.UUID;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.solr.client.solrj.SolrQuery;
 import org.apache.solr.client.solrj.SolrServerException;
-import org.apache.solr.client.solrj.response.FacetField;
-import org.apache.solr.client.solrj.response.QueryResponse;
 import org.dspace.app.rest.converter.ConverterService;
+import org.dspace.app.rest.exception.DSpaceBadRequestException;
 import org.dspace.app.rest.model.ItemStatsRest;
 import org.dspace.app.rest.model.RestModel;
 import org.dspace.app.rest.model.hateoas.ItemStatsResource;
 import org.dspace.app.rest.utils.ContextUtil;
 import org.dspace.app.rest.utils.DSpaceObjectUtils;
-import org.dspace.app.rest.utils.Utils;
 import org.dspace.authorize.service.AuthorizeService;
 import org.dspace.content.Collection;
 import org.dspace.content.Community;
 import org.dspace.content.DSpaceObject;
 import org.dspace.content.Item;
-import org.dspace.content.factory.ContentServiceFactory;
+import org.dspace.content.Site;
 import org.dspace.content.service.ItemService;
 import org.dspace.core.Constants;
 import org.dspace.core.Context;
+import org.dspace.otcloud.statistics.OTCloudStatisticsService;
+import org.dspace.otcloud.statistics.StatBucket;
+import org.dspace.otcloud.statistics.StatBucketPage;
+import org.dspace.otcloud.statistics.StatDateRange;
 import org.dspace.services.ConfigurationService;
-import org.dspace.statistics.SolrLoggerServiceImpl;
-import org.dspace.statistics.factory.StatisticsServiceFactory;
-import org.dspace.statistics.service.SolrLoggerService;
 import org.springframework.beans.factory.InitializingBean;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.data.domain.Page;
@@ -61,7 +59,11 @@ import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 
 /**
- * Custom controller for OTCloud statistics.
+ * Extended usage statistics endpoints that the stock DSpace {@code usagereports} endpoint does not
+ * cover, such as a paged list of the most viewed items within a container.
+ *
+ * <p>All aggregation is delegated to {@link OTCloudStatisticsService} so that the Solr query
+ * details live in one place and this controller stays a thin REST adapter.</p>
  */
 @RestController
 @RequestMapping("/api/" + RestModel.OTCLOUD_STATS)
@@ -77,16 +79,16 @@ public class OTCloudStatsController implements InitializingBean {
     private ConverterService converter;
 
     @Autowired
-    private Utils utils;
-
-    @Autowired
     private AuthorizeService authorizeService;
 
     @Autowired
     private ConfigurationService configurationService;
 
-    private final SolrLoggerService solrLoggerService = StatisticsServiceFactory.getInstance().getSolrLoggerService();
-    private final ItemService itemService = ContentServiceFactory.getInstance().getItemService();
+    @Autowired
+    private ItemService itemService;
+
+    @Autowired
+    private OTCloudStatisticsService otCloudStatisticsService;
 
     @Override
     public void afterPropertiesSet() throws Exception {
@@ -94,9 +96,21 @@ public class OTCloudStatsController implements InitializingBean {
                 List.of(Link.of("/api/" + RestModel.OTCLOUD_STATS + "/top-items", "top-items")));
     }
 
+    /**
+     * Return a page of the most viewed items within a community, collection or the whole site,
+     * each with its view and download counts.
+     *
+     * @param uuid         the community, collection or site to report on
+     * @param startDateStr optional inclusive start of the reporting period
+     * @param endDateStr   optional inclusive end of the reporting period
+     * @param pageable     the requested page
+     * @param request      the current request, used to obtain the DSpace context
+     * @param response     the current response
+     * @return a page of item statistics ordered by descending view count
+     */
     @GetMapping("/top-items")
     public Page<ItemStatsResource> getTopItems(
-            @RequestParam(name = "uuid", required = true) UUID uuid,
+            @RequestParam(name = "uuid") UUID uuid,
             @RequestParam(name = "startDate", required = false) String startDateStr,
             @RequestParam(name = "endDate", required = false) String endDateStr,
             Pageable pageable, HttpServletRequest request, HttpServletResponse response) {
@@ -104,159 +118,108 @@ public class OTCloudStatsController implements InitializingBean {
         Context context = ContextUtil.obtainContext(request);
         try {
             DSpaceObject dso = dspaceObjectUtil.findDSpaceObject(context, uuid);
-            if (dso == null || !(dso instanceof Community || dso instanceof Collection)) {
-                throw new ResourceNotFoundException("No Community or Collection found with uuid: " + uuid);
+            if (!(dso instanceof Community || dso instanceof Collection || dso instanceof Site)) {
+                throw new ResourceNotFoundException(
+                        "No Community, Collection or Site found with uuid: " + uuid);
             }
 
-            if (configurationService.getBooleanProperty("usage-statistics.authorization.admin.usage", false)) {
-                if (!authorizeService.isAdmin(context)) {
-                    throw new AccessDeniedException("The statistics are only visible to administrators.");
-                }
-            } else if (!authorizeService.authorizeActionBoolean(context, dso, Constants.READ)) {
-                throw new AccessDeniedException("The statistics are only visible to users with READ access.");
-            }
+            authorizeStatisticsAccess(context, dso);
 
-            LocalDateTime startDate = parseDate(startDateStr);
-            LocalDateTime endDate = parseDate(endDateStr);
+            StatDateRange range = new StatDateRange(parseDate(startDateStr, "startDate"),
+                                                    parseDate(endDateStr, "endDate"));
 
-            List<ItemStatsRest> stats = fetchTopItemsStats(context, dso, startDate, endDate, pageable);
-            long total = countTotalTopItems(context, dso, startDate, endDate);
+            DSpaceObject scope = dso instanceof Site ? null : dso;
+            StatBucketPage buckets = otCloudStatisticsService.topItems(scope, range,
+                                                                      (int) pageable.getOffset(),
+                                                                      pageable.getPageSize());
 
-            return new PageImpl<>(stats, pageable, total).map(s -> (ItemStatsResource) converter.toResource(s));
+            List<ItemStatsRest> stats = toItemStats(context, buckets);
+            return new PageImpl<>(stats, pageable, buckets.getTotalBuckets())
+                    .map(stat -> (ItemStatsResource) converter.toResource(stat));
 
-        } catch (SQLException | SolrServerException | IOException | ParseException e) {
+        } catch (SQLException | SolrServerException | IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage(), e);
         }
     }
 
-    private List<ItemStatsRest> fetchTopItemsStats(Context context, DSpaceObject container,
-                                                   LocalDateTime startDate, LocalDateTime endDate,
-                                                   Pageable pageable)
-            throws SolrServerException, IOException, SQLException {
-
-        SolrQuery solrQuery = new SolrQuery();
-        solrQuery.setQuery("*:*");
-        solrQuery.setRows(0);
-        solrQuery.setFacet(true);
-        solrQuery.setFacetLimit(pageable.getPageSize());
-        solrQuery.setFacetMinCount(1);
-        solrQuery.addFacetField("id");
-
-        String filterQuery = "";
-        if (container instanceof Community) {
-            filterQuery = "owningComm:" + container.getID();
-        } else {
-            filterQuery = "owningColl:" + container.getID();
-        }
-        filterQuery += " AND type:" + Constants.ITEM;
-
-        if (startDate != null && endDate != null) {
-            DateTimeFormatter formatter = DateTimeFormatter.ISO_INSTANT;
-            String start = formatter.format(startDate.toInstant(ZoneOffset.UTC));
-            String end = formatter.format(endDate.toInstant(ZoneOffset.UTC));
-            filterQuery += " AND time:[" + start + " TO " + end + "]";
-        }
-
-        solrQuery.addFilterQuery(filterQuery);
-
-        // We want top items, usually based on views
-        solrQuery.addFilterQuery("statistics_type:" + SolrLoggerServiceImpl.StatisticsType.VIEW.text());
-
-        QueryResponse response = solrLoggerService.query(solrQuery.getQuery(), solrQuery.getFilterQueries()[0],
-                "id", 0, pageable.getPageSize(), (int) pageable.getOffset(), null, null, null, null, null, false, 1);
-
-        List<ItemStatsRest> results = new ArrayList<>();
-        FacetField idFacet = response.getFacetField("id");
-        if (idFacet != null) {
-            for (FacetField.Count count : idFacet.getValues()) {
-                ItemStatsRest itemStats = new ItemStatsRest();
-                UUID itemUuid = UUID.fromString(count.getName());
-                Item item = itemService.find(context, itemUuid);
-                if (item != null) {
-                    itemStats.setId(itemUuid.toString());
-                    itemStats.setLabel(item.getName());
-                    itemStats.setViews((int) count.getCount());
-
-                    // Fetch downloads for this item specifically
-                    itemStats.setDownloads(fetchDownloadsForItem(itemUuid, startDate, endDate));
-                    results.add(itemStats);
-                }
+    /**
+     * Resolve each statistics bucket to the item it refers to, dropping buckets whose item no
+     * longer exists or is not readable by the current user.
+     *
+     * @param context the DSpace context
+     * @param buckets the statistics buckets to resolve
+     * @return the resolved item statistics, in the order the buckets were returned
+     * @throws SQLException if the item lookup fails
+     */
+    private List<ItemStatsRest> toItemStats(Context context, StatBucketPage buckets) throws SQLException {
+        List<ItemStatsRest> stats = new ArrayList<>();
+        for (StatBucket bucket : buckets.getBuckets()) {
+            UUID itemUuid = toUuid(bucket.getValue());
+            if (itemUuid == null) {
+                continue;
             }
-        }
+            Item item = itemService.find(context, itemUuid);
+            if (item == null) {
+                continue;
+            }
 
-        return results;
+            ItemStatsRest itemStats = new ItemStatsRest();
+            itemStats.setId(itemUuid.toString());
+            itemStats.setLabel(item.getName());
+            itemStats.setViews((int) bucket.getViews());
+            itemStats.setDownloads((int) bucket.getDownloads());
+            stats.add(itemStats);
+        }
+        return stats;
     }
 
-    private long countTotalTopItems(Context context, DSpaceObject container,
-                                    LocalDateTime startDate, LocalDateTime endDate)
-            throws SolrServerException, IOException, SQLException {
-
-        SolrQuery solrQuery = new SolrQuery();
-        solrQuery.setQuery("*:*");
-        solrQuery.setRows(0);
-        solrQuery.setFacet(true);
-        solrQuery.setFacetMinCount(1);
-        solrQuery.addFacetField("id");
-
-        String filterQuery = "";
-        if (container instanceof Community) {
-            filterQuery = "owningComm:" + container.getID();
-        } else {
-            filterQuery = "owningColl:" + container.getID();
+    /**
+     * Apply the same visibility rules the stock usage reports use: administrators only when
+     * {@code usage-statistics.authorization.admin.usage} is set, otherwise anyone who can read the
+     * object.
+     *
+     * @param context the DSpace context
+     * @param dso     the object being reported on
+     * @throws SQLException if the authorization check fails
+     */
+    private void authorizeStatisticsAccess(Context context, DSpaceObject dso) throws SQLException {
+        if (configurationService.getBooleanProperty("usage-statistics.authorization.admin.usage", false)) {
+            if (!authorizeService.isAdmin(context)) {
+                throw new AccessDeniedException("The statistics are only visible to administrators.");
+            }
+        } else if (!authorizeService.authorizeActionBoolean(context, dso, Constants.READ)) {
+            throw new AccessDeniedException("The statistics are only visible to users with READ access.");
         }
-        filterQuery += " AND type:" + Constants.ITEM;
-
-        if (startDate != null && endDate != null) {
-            DateTimeFormatter formatter = DateTimeFormatter.ISO_INSTANT;
-            String start = formatter.format(startDate.toInstant(ZoneOffset.UTC));
-            String end = formatter.format(endDate.toInstant(ZoneOffset.UTC));
-            filterQuery += " AND time:[" + start + " TO " + end + "]";
-        }
-
-        solrQuery.addFilterQuery(filterQuery);
-        solrQuery.addFilterQuery("statistics_type:" + SolrLoggerServiceImpl.StatisticsType.VIEW.text());
-
-        // Fetch up to a large limit (e.g. 1000000) to find the total number of facet values
-        QueryResponse response = solrLoggerService.query(solrQuery.getQuery(), solrQuery.getFilterQueries()[0],
-                "id", 0, 1000000, 0, null, null, null, null, null, false, 1);
-
-        FacetField idFacet = response.getFacetField("id");
-        return idFacet != null ? idFacet.getValueCount() : 0;
     }
 
-    private int fetchDownloadsForItem(UUID itemUuid, LocalDateTime startDate, LocalDateTime endDate)
-            throws SolrServerException, IOException {
-        SolrQuery solrQuery = new SolrQuery();
-        solrQuery.setQuery("owningItem:" + itemUuid + " AND type:" + Constants.BITSTREAM +
-                " AND statistics_type:" + SolrLoggerServiceImpl.StatisticsType.VIEW.text());
-
-        if (startDate != null && endDate != null) {
-            DateTimeFormatter formatter = DateTimeFormatter.ISO_INSTANT;
-            String start = formatter.format(startDate.toInstant(ZoneOffset.UTC));
-            String end = formatter.format(endDate.toInstant(ZoneOffset.UTC));
-            solrQuery.addFilterQuery("time:[" + start + " TO " + end + "]");
+    private UUID toUuid(String value) {
+        try {
+            return UUID.fromString(value);
+        } catch (IllegalArgumentException e) {
+            return null;
         }
-
-        QueryResponse response = solrLoggerService.query(solrQuery.getQuery(),
-                solrQuery.getFilterQueries() != null && solrQuery.getFilterQueries().length > 0 ?
-                        solrQuery.getFilterQueries()[0] : null,
-                null, 0, 0, null, null, null, null, null, false, 1, true);
-
-        return (int) response.getResults().getNumFound();
     }
 
-    private LocalDateTime parseDate(String dateStr) throws ParseException {
+    /**
+     * Parse a request date, accepting either a full ISO date-time or an ISO instant. Both are
+     * interpreted as UTC, matching how DSpace stores usage event timestamps.
+     *
+     * @param dateStr   the raw request value, may be blank
+     * @param paramName the parameter name, used in the error message
+     * @return the parsed value, or null when nothing was supplied
+     */
+    private LocalDateTime parseDate(String dateStr, String paramName) {
         if (StringUtils.isBlank(dateStr)) {
             return null;
         }
         try {
             return LocalDateTime.parse(dateStr, DateTimeFormatter.ISO_DATE_TIME);
         } catch (DateTimeParseException e) {
-            // Try ISO_INSTANT (standard for Solr/DSpace API)
             try {
-                return LocalDateTime.ofInstant(java.time.Instant.parse(dateStr), ZoneOffset.UTC);
+                return LocalDateTime.ofInstant(Instant.parse(dateStr), ZoneOffset.UTC);
             } catch (DateTimeParseException e2) {
-                throw new ParseException("Invalid date format: " + dateStr, 0);
+                throw new DSpaceBadRequestException(
+                        "Invalid " + paramName + " value, expected an ISO date-time: " + dateStr);
             }
         }
     }
