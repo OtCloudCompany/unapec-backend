@@ -25,8 +25,10 @@ import org.apache.solr.client.solrj.SolrServerException;
 import org.dspace.app.rest.converter.ConverterService;
 import org.dspace.app.rest.exception.DSpaceBadRequestException;
 import org.dspace.app.rest.model.ItemStatsRest;
+import org.dspace.app.rest.model.MetadataUsageRest;
 import org.dspace.app.rest.model.RestModel;
 import org.dspace.app.rest.model.hateoas.ItemStatsResource;
+import org.dspace.app.rest.model.hateoas.MetadataUsageResource;
 import org.dspace.app.rest.utils.ContextUtil;
 import org.dspace.app.rest.utils.DSpaceObjectUtils;
 import org.dspace.authorize.service.AuthorizeService;
@@ -38,6 +40,9 @@ import org.dspace.content.Site;
 import org.dspace.content.service.ItemService;
 import org.dspace.core.Constants;
 import org.dspace.core.Context;
+import org.dspace.otcloud.statistics.MetadataUsageRow;
+import org.dspace.otcloud.statistics.MetadataUsageService;
+import org.dspace.otcloud.statistics.MetadataUsageTable;
 import org.dspace.otcloud.statistics.OTCloudStatisticsService;
 import org.dspace.otcloud.statistics.StatBucket;
 import org.dspace.otcloud.statistics.StatBucketPage;
@@ -90,10 +95,82 @@ public class OTCloudStatsController implements InitializingBean {
     @Autowired
     private OTCloudStatisticsService otCloudStatisticsService;
 
+    @Autowired
+    private MetadataUsageService metadataUsageService;
+
     @Override
     public void afterPropertiesSet() throws Exception {
-        discoverableEndpointsService.register(this,
-                List.of(Link.of("/api/" + RestModel.OTCLOUD_STATS + "/top-items", "top-items")));
+        discoverableEndpointsService.register(this, List.of(
+                Link.of("/api/" + RestModel.OTCLOUD_STATS + "/top-items", "top-items"),
+                Link.of("/api/" + RestModel.OTCLOUD_STATS + "/metadata-usage", "metadata-usage")));
+    }
+
+    /**
+     * Aggregate views and downloads by the values of a metadata field, for example the most viewed
+     * authors, departments or publication types.
+     *
+     * <p>The usage statistics core stores no item metadata, so this report is built by grouping the
+     * most viewed items in scope by their metadata. The number of items aggregated is capped; when
+     * the cap is reached every row carries {@code truncated: true} and the counts describe the most
+     * viewed items rather than repository-wide totals.</p>
+     *
+     * @param uuid          the community, collection or site to report on
+     * @param metadataField the field to group by, in {@code schema.element[.qualifier]} form
+     * @param startDateStr  optional inclusive start of the reporting period
+     * @param endDateStr    optional inclusive end of the reporting period
+     * @param pageable      the requested page
+     * @param request       the current request, used to obtain the DSpace context
+     * @param response      the current response
+     * @return a page of metadata values ordered by descending views
+     */
+    @GetMapping("/metadata-usage")
+    public Page<MetadataUsageResource> getMetadataUsage(
+            @RequestParam(name = "uuid") UUID uuid,
+            @RequestParam(name = "field") String metadataField,
+            @RequestParam(name = "startDate", required = false) String startDateStr,
+            @RequestParam(name = "endDate", required = false) String endDateStr,
+            Pageable pageable, HttpServletRequest request, HttpServletResponse response) {
+
+        Context context = ContextUtil.obtainContext(request);
+        try {
+            DSpaceObject dso = dspaceObjectUtil.findDSpaceObject(context, uuid);
+            if (!(dso instanceof Community || dso instanceof Collection || dso instanceof Site)) {
+                throw new ResourceNotFoundException(
+                        "No Community, Collection or Site found with uuid: " + uuid);
+            }
+            authorizeStatisticsAccess(context, dso);
+
+            StatDateRange range = new StatDateRange(parseDate(startDateStr, "startDate"),
+                                                    parseDate(endDateStr, "endDate"));
+            DSpaceObject scope = dso instanceof Site ? null : dso;
+
+            MetadataUsageTable table;
+            try {
+                table = metadataUsageService.aggregate(context, scope, metadataField, range,
+                                                      (int) pageable.getOffset(), pageable.getPageSize());
+            } catch (IllegalArgumentException e) {
+                throw new DSpaceBadRequestException(e.getMessage());
+            }
+
+            List<MetadataUsageRest> rows = new ArrayList<>();
+            for (MetadataUsageRow row : table.getRows()) {
+                MetadataUsageRest rest = new MetadataUsageRest();
+                rest.setId(metadataField + ":" + row.getValue());
+                rest.setValue(row.getValue());
+                rest.setViews(row.getViews());
+                rest.setDownloads(row.getDownloads());
+                rest.setItems(row.getItems());
+                rest.setTruncated(table.isTruncated());
+                rest.setItemsConsidered(table.getItemsConsidered());
+                rows.add(rest);
+            }
+
+            return new PageImpl<>(rows, pageable, table.getTotalRows())
+                    .map(row -> (MetadataUsageResource) converter.toResource(row));
+
+        } catch (SQLException | SolrServerException | IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage(), e);
+        }
     }
 
     /**

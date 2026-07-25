@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    The contents of this file are subject to the license and copyright
+    detailed in the LICENSE and NOTICE files at the root of the source
+    tree and available online at
+
+    http://www.dspace.org/license/
+
+-->
+<!--
+    Test-environment counterpart of dspace/config/spring/api/audit-services.xml.
+
+    The test environment assembly overlays this directory on top of the production config, matching
+    by path, so this file replaces the production audit configuration wholesale rather than fighting
+    with it over bean definition order.
+
+    Two things differ from production:
+      - the audit service is a mock backed by an embedded Solr core, so tests never need a running
+        Solr instance;
+      - HttpSolrClientFactory is declared here, because the test solr-services.xml replaces the
+        production one and therefore does not provide it.
+-->
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+           http://www.springframework.org/schema/beans/spring-beans.xsd
+           http://www.springframework.org/schema/context
+           http://www.springframework.org/schema/context/spring-context.xsd">
+
+    <context:annotation-config/>
+
+    <bean id="defaultSolrDocumentFactory"
+          class="org.dspace.discovery.DefaultSolrDocumentFactory"
+          autowire-candidate="true"/>
+
+    <bean id="auditServiceFactory"
+          class="org.dspace.app.audit.factory.AuditServiceFactoryImpl"/>
+
+    <bean id='HttpSolrClientFactory'
+          class='org.dspace.statistics.HttpSolrClientFactory'>
+        <description>HTTP connection to a Solr instance.</description>
+    </bean>
+
+    <bean id="auditSolrService"
+          class="org.dspace.app.audit.MockAuditSolrService"
+          autowire-candidate="true">
+        <property name="solrDocumentFactory" ref="defaultSolrDocumentFactory"/>
+        <property name="httpSolrClientFactory" ref="HttpSolrClientFactory"/>
+    </bean>
+
+</beans>

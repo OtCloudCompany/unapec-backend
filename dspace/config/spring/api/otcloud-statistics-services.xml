@@ -35,4 +35,25 @@
         </description>
     </bean>
 
+    <bean id="metadataUsageService"
+          class="org.dspace.otcloud.statistics.MetadataUsageService"
+          autowire-candidate="true"
+          lazy-init="true">
+        <description>
+            Aggregates views and downloads by the values of any metadata field, for example top
+            authors or top departments.
+        </description>
+    </bean>
+
+    <bean id="staffActivityService"
+          class="org.dspace.otcloud.audit.StaffActivityService"
+          autowire-candidate="true"
+          lazy-init="true">
+        <description>
+            Aggregation queries against the audit Solr core, reporting how many items each staff
+            member created, archived, edited or deleted in a period. Returns empty results unless
+            audit.enabled is true.
+        </description>
+    </bean>
+
 </beans>

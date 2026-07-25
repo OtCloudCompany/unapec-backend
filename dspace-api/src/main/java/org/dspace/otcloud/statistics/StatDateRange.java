@@ -64,10 +64,22 @@ public class StatDateRange {
      *         the range is unbounded
      */
     public String toSolrFilterQuery() {
+        return toSolrFilterQuery("time");
+    }
+
+    /**
+     * Render this range as a Solr range filter on an arbitrary date field. The usage statistics core
+     * names its event timestamp {@code time} while the audit core names its own {@code timeStamp},
+     * so the field has to be supplied by the caller.
+     *
+     * @param field the Solr date field to filter on
+     * @return a Solr filter query, or null when the range is unbounded
+     */
+    public String toSolrFilterQuery(String field) {
         if (isUnbounded()) {
             return null;
         }
-        return "time:[" + startBound() + " TO " + endBound() + "]";
+        return field + ":[" + startBound() + " TO " + endBound() + "]";
     }
 
     /**

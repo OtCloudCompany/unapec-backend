@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+
+    The contents of this file are subject to the license and copyright
+    detailed in the LICENSE and NOTICE files at the root of the source
+    tree and available online at
+
+    http://www.dspace.org/license/
+
+-->
+<!--
+    Audit trail beans, backported from DSpace 10 (PR #11072).
+
+    Upstream declares these in solr-services.xml and core-factory-services.xml. They are kept in a
+    file of their own here so that the upstream Spring configuration in this 9.2 tree carries no
+    local edits.
+
+    ON UPGRADING TO DSPACE 10 OR LATER: delete this file. Upstream will define the same beans, and
+    leaving both in place would register each audit bean twice. The bean ids below deliberately
+    match the upstream ids so that, if this file is missed, Spring reports a deterministic
+    definition override rather than an ambiguous by-type autowire failure.
+-->
+<beans xmlns="http://www.springframework.org/schema/beans"
+       xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xmlns:context="http://www.springframework.org/schema/context"
+       xsi:schemaLocation="http://www.springframework.org/schema/beans
+           http://www.springframework.org/schema/beans/spring-beans.xsd
+           http://www.springframework.org/schema/context
+           http://www.springframework.org/schema/context/spring-context.xsd">
+
+    <context:annotation-config/>
+
+    <bean id="defaultSolrDocumentFactory"
+          class="org.dspace.discovery.DefaultSolrDocumentFactory"
+          autowire-candidate="true"/>
+
+    <bean id="auditServiceFactory"
+          class="org.dspace.app.audit.factory.AuditServiceFactoryImpl"/>
+
+    <bean id="auditSolrService"
+          class="org.dspace.app.audit.AuditSolrServiceImpl"
+          autowire-candidate="true">
+        <description>
+            Stores and retrieves DSpace object change events in the "audit" Solr core. Inert unless
+            audit.enabled is true in config/modules/audit.cfg.
+        </description>
+        <property name="solrDocumentFactory" ref="defaultSolrDocumentFactory"/>
+        <property name="httpSolrClientFactory" ref="HttpSolrClientFactory"/>
+    </bean>
+
+</beans>

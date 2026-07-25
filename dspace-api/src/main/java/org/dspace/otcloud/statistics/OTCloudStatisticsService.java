@@ -8,8 +8,10 @@
 package org.dspace.otcloud.statistics;
 
 import java.io.IOException;
+import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Date;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -81,6 +83,20 @@ public class OTCloudStatisticsService {
             return "owningItem:" + container.getID();
         }
         return null;
+    }
+
+    /**
+     * Build the Solr filter query that selects usage events on the object itself, as opposed to
+     * events on its descendants.
+     *
+     * @param dso the object to scope to, or null for the whole site
+     * @return a Solr filter query, or null when the whole site is in scope
+     */
+    public String selfFilter(DSpaceObject dso) {
+        if (dso == null) {
+            return null;
+        }
+        return "id:" + dso.getID();
     }
 
     /**
@@ -400,9 +416,26 @@ public class OTCloudStatisticsService {
                 continue;
             }
             long views = count instanceof Number ? ((Number) count).longValue() : 0L;
-            buckets.add(new StatBucket(String.valueOf(value), views));
+            buckets.add(new StatBucket(bucketValue(value), views));
         }
         return buckets;
+    }
+
+    /**
+     * Render a facet bucket value as a string.
+     *
+     * <p>Term buckets come back as strings, but a range facet over a date field yields
+     * {@link Date} values, which would otherwise be rendered in Java's default date format. Dates
+     * are emitted as ISO instants so that a time series is directly usable by a client.</p>
+     *
+     * @param value the raw bucket value from Solr
+     * @return the value as a string
+     */
+    protected String bucketValue(Object value) {
+        if (value instanceof Date) {
+            return DateTimeFormatter.ISO_INSTANT.format(((Date) value).toInstant());
+        }
+        return String.valueOf(value);
     }
 
     /**
