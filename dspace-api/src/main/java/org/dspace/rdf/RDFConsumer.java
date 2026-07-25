@@ -32,7 +32,9 @@ import org.dspace.content.service.WorkspaceItemService;
 import org.dspace.core.Constants;
 import org.dspace.core.Context;
 import org.dspace.event.Consumer;
+import org.dspace.event.DetailType;
 import org.dspace.event.Event;
+import org.dspace.event.EventDetail;
 import org.dspace.workflow.WorkflowItemService;
 import org.dspace.workflow.factory.WorkflowServiceFactory;
 
@@ -199,8 +201,11 @@ public class RDFConsumer implements Consumer {
         }
 
         if (event.getEventType() == Event.DELETE) {
+            EventDetail detail = event.getDetail();
+            String handle = detail != null && DetailType.HANDLE.equals(detail.getDetailType())
+                ? (String) detail.getDetailObject() : null;
             DSOIdentifier id = new DSOIdentifier(event.getSubjectType(),
-                                                 event.getSubjectID(), event.getDetail(), event.getIdentifiers());
+                                                 event.getSubjectID(), handle, event.getIdentifiers());
 
             if (this.toConvert.contains(id)) {
                 this.toConvert.remove(id);
@@ -245,9 +250,10 @@ public class RDFConsumer implements Consumer {
             // delete the item from the triple store instead of converting it.
             // we don't have to take care for reinstate events on items as they can
             // be processed as normal modify events.
+            EventDetail modifyDetail = event.getDetail();
             if (dso instanceof Item
-                && event.getDetail() != null
-                && event.getDetail().equals("WITHDRAW")) {
+                && modifyDetail != null
+                && "WITHDRAW".equals(modifyDetail.getDetailObject())) {
                 if (this.toConvert.contains(id)) {
                     this.toConvert.remove(id);
                 }
