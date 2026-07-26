@@ -26,7 +26,7 @@ import org.apache.solr.client.solrj.response.QueryResponse;
 import org.apache.solr.common.util.NamedList;
 import org.dspace.otcloud.statistics.StatDateRange;
 import org.dspace.services.ConfigurationService;
-import org.dspace.statistics.HttpSolrClientFactory;
+import org.dspace.statistics.SolrClientFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 
 /**
@@ -68,8 +68,13 @@ public class StaffActivityService {
     @Autowired
     protected ConfigurationService configurationService;
 
+    /**
+     * Built by whichever {@link SolrClientFactory} the running environment provides: the HTTP one in
+     * a real deployment, the embedded one under test. Depending on the interface rather than on
+     * {@code HttpSolrClientFactory} keeps this service wireable in both.
+     */
     @Autowired
-    protected HttpSolrClientFactory httpSolrClientFactory;
+    protected SolrClientFactory solrClientFactory;
 
     private SolrClient solr;
 
@@ -278,7 +283,7 @@ public class StaffActivityService {
                 log.warn("audit.solr.server is not configured; staff activity reports are unavailable");
                 return null;
             }
-            solr = httpSolrClientFactory.getClient(server);
+            solr = solrClientFactory.getClient(server);
         }
         return solr;
     }

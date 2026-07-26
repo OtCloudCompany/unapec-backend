@@ -38,8 +38,20 @@
     <bean id="auditServiceFactory"
           class="org.dspace.app.audit.factory.AuditServiceFactoryImpl"/>
 
+    <!--
+        Only here to satisfy AuditSolrServiceImpl.httpSolrClientFactory, which upstream types as the
+        concrete HttpSolrClientFactory; MockAuditSolrService overrides getSolr() so no HTTP
+        connection is ever opened through it.
+
+        autowire-candidate is deliberately false. When it was a candidate, it silently satisfied
+        by-type injection of a SolrClientFactory in the test context, which hid the fact that
+        production's solr-services.xml excludes HttpSolrClientFactory from autowiring - a bean that
+        wires under test and fails on deployment. Test code must not be the only place a dependency
+        resolves.
+    -->
     <bean id='HttpSolrClientFactory'
-          class='org.dspace.statistics.HttpSolrClientFactory'>
+          class='org.dspace.statistics.HttpSolrClientFactory'
+          autowire-candidate='false'>
         <description>HTTP connection to a Solr instance.</description>
     </bean>
 

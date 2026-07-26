@@ -74,6 +74,7 @@ detail types.
 
 | File | Nature of the edit |
 | --- | --- |
+| `dspace/config/spring/api/solr-services.xml` | `*Factory` added to `default-autowire-candidates`. This is byte-for-byte the change upstream PR #11072 made, so on upgrade the file will already match and can be taken from upstream wholesale. Without it `HttpSolrClientFactory` — whose bean id matches none of `*Service`, `*DAO`, `javax.sql.DataSource` — is excluded from by-type autowiring, and any service that injects a `SolrClientFactory` fails at context startup. See the note against `StaffActivityService` below. |
 | `dspace/config/dspace.cfg` | `audit` added to `event.dispatcher.default.consumers`; `event.consumer.audit.*` registered |
 | `dspace/config/modules/rest.cfg` | Exposes `audit.enabled` and `audit.context-menu-entry.enabled` to the frontend |
 | `dspace/config/modules/usage-statistics.cfg` | Added `otcloud-statistics.metadata-table.max-items` |
@@ -124,6 +125,13 @@ Local work, to be carried forward:
 
 ## Operational notes
 
+- **Inject `SolrClientFactory`, never `HttpSolrClientFactory`.** `StaffActivityService` autowires the
+  interface. Depending on the concrete class works under test — the test Spring context happens to
+  declare that bean without the autowire-candidate restriction — and then fails at startup on a real
+  deployment with `No qualifying bean of type HttpSolrClientFactory ... which qualifies as autowire
+  candidate`. The interface resolves to `HttpSolrClientFactory` in production and
+  `EmbeddedSolrClientFactory` under test. The test-side declaration is now marked
+  `autowire-candidate='false'` specifically so it can never mask this again.
 - **Auditing is off by default.** Set `audit.enabled = true` in `config/modules/audit.cfg`, and make
   sure the `audit` Solr core has been deployed.
 - **Only archived items are fully audited by default.** `audit.item.in-workflow` and
