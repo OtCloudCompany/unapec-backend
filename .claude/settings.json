@@ -1,7 +1,14 @@
 {
   "permissions": {
     "allow": [
-      "Bash(awk '{print $1, $2}')"
+      "Bash(awk '{print $1, $2}')",
+      "Bash(git ls-remote *)",
+      "Bash(grep -E \"Tests run:.*Failures.*Errors.*Skipped$\" /tmp/fix-tests.log)",
+      "Bash(rm -f /tmp/clean-status.txt)",
+      "Bash(powershell -NoProfile -Command \"Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force\")",
+      "Bash(mvn clean *)",
+      "Bash(echo \"INSTALL_EXIT=$?\")",
+      "Bash(mvn -pl dspace-api test -DskipUnitTests=false -Dlicense.skip=true)"
     ]
   }
 }
