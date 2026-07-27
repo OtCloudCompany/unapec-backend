@@ -8,7 +8,13 @@
       "Bash(powershell -NoProfile -Command \"Get-Process -Name java -ErrorAction SilentlyContinue | Stop-Process -Force\")",
       "Bash(mvn clean *)",
       "Bash(echo \"INSTALL_EXIT=$?\")",
-      "Bash(mvn -pl dspace-api test -DskipUnitTests=false -Dlicense.skip=true)"
+      "Bash(mvn -pl dspace-api test -DskipUnitTests=false -Dlicense.skip=true)",
+      "Bash(grep -E \"Tests run:.*Failures: [0-9]+, Errors: [0-9]+, Skipped: [0-9]+$\" /tmp/clean2-tests.log)",
+      "Bash(powershell -NoProfile -Command ' *)"
+    ],
+    "additionalDirectories": [
+      "f:\\projects\\unapec\\src\\themes\\otcloud\\app\\community-page",
+      "f:\\projects\\unapec\\src\\themes\\otcloud\\app\\collection-page"
     ]
   }
 }

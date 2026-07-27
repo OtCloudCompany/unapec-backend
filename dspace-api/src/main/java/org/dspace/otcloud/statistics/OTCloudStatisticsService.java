@@ -8,6 +8,7 @@
 package org.dspace.otcloud.statistics;
 
 import java.io.IOException;
+import java.sql.SQLException;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -27,6 +28,7 @@ import org.dspace.content.Collection;
 import org.dspace.content.Community;
 import org.dspace.content.DSpaceObject;
 import org.dspace.content.Item;
+import org.dspace.content.service.CommunityService;
 import org.dspace.core.Constants;
 import org.dspace.services.ConfigurationService;
 import org.dspace.statistics.SolrStatisticsCore;
@@ -53,11 +55,21 @@ public class OTCloudStatisticsService {
      */
     public static final String STATISTICS_TYPE_VIEW = "view";
 
+    /**
+     * Solr filter fragment matching both kinds of search event: {@code search}, recorded when a
+     * search returns no clicked result, and {@code search_result}, recorded when the user clicked
+     * through to an item. A "top searches" report wants every query that was run, so it counts both.
+     */
+    private static final String STATISTICS_TYPE_SEARCH_FILTER = "(search OR search_result)";
+
     @Autowired
     protected SolrStatisticsCore solrStatisticsCore;
 
     @Autowired
     protected ConfigurationService configurationService;
+
+    @Autowired
+    protected CommunityService communityService;
 
     /**
      * Build the Solr filter query that scopes a statistics search to the given container.
@@ -83,6 +95,82 @@ public class OTCloudStatisticsService {
             return "owningItem:" + container.getID();
         }
         return null;
+    }
+
+    /**
+     * Build the Solr filter query that scopes a search-event report to the given container.
+     *
+     * <p>Search events carry a single {@code scopeId} field - the exact community or collection the
+     * search was run within - with none of the ancestor expansion that {@link #scopeFilter} relies
+     * on for view/download events. So that a community's report still includes searches scoped to
+     * its sub-communities and collections, this walks the hierarchy down from the container and
+     * matches on any of their ids.</p>
+     *
+     * @param container the community or collection to scope to, or null for the whole site
+     * @return a Solr filter query, or null when the whole site is in scope
+     * @throws SQLException if the container's descendants cannot be resolved
+     */
+    public String searchScopeFilter(DSpaceObject container) throws SQLException {
+        if (container == null) {
+            return null;
+        }
+        if (container instanceof Collection) {
+            return "scopeId:" + container.getID();
+        }
+        if (container instanceof Community) {
+            List<UUID> ids = new ArrayList<>();
+            collectDescendantCommunityIds((Community) container, ids);
+            for (Collection collection : communityService.getAllCollections(null, (Community) container)) {
+                ids.add(collection.getID());
+            }
+            return "scopeId:(" + StringUtils.join(asStrings(ids), " OR ") + ")";
+        }
+        return null;
+    }
+
+    /**
+     * Collect the id of a community and every sub-community beneath it.
+     *
+     * @param community the community to start from
+     * @param ids       the list to add ids to
+     * @throws SQLException if a sub-community lookup fails
+     */
+    private void collectDescendantCommunityIds(Community community, List<UUID> ids) throws SQLException {
+        ids.add(community.getID());
+        for (Community subCommunity : community.getSubcommunities()) {
+            collectDescendantCommunityIds(subCommunity, ids);
+        }
+    }
+
+    /**
+     * Return one page of the most frequently run search queries within a container, ordered by
+     * descending frequency.
+     *
+     * @param container the community or collection to look within, or null for the whole site
+     * @param range     the date range to count within
+     * @param offset    zero-based bucket offset
+     * @param limit     maximum number of queries to return
+     * @return a page of buckets keyed by the raw query string, with the search count in views
+     * @throws SolrServerException if the Solr query fails
+     * @throws IOException         if the Solr query fails
+     * @throws SQLException        if the container's descendants cannot be resolved
+     */
+    public StatBucketPage topSearches(DSpaceObject container, StatDateRange range, int offset, int limit)
+        throws SolrServerException, IOException, SQLException {
+
+        SolrQuery solrQuery = baseQuery(searchScopeFilter(container), -1, range, STATISTICS_TYPE_SEARCH_FILTER);
+
+        String jsonFacet = "{\"buckets\":{\"type\":\"terms\",\"field\":\"query\""
+            + ",\"limit\":" + limit
+            + ",\"offset\":" + offset
+            + ",\"mincount\":1,\"numBuckets\":true,\"sort\":\"count desc\"}}";
+        solrQuery.set("json.facet", jsonFacet);
+
+        QueryResponse response = execute(solrQuery);
+        if (response == null) {
+            return new StatBucketPage(Collections.emptyList(), 0);
+        }
+        return readBucketPage(response, "buckets");
     }
 
     /**
@@ -284,10 +372,26 @@ public class OTCloudStatisticsService {
      * @return a query with zero rows requested, ready for a facet to be attached
      */
     protected SolrQuery baseQuery(String scopeFilter, int dsoType, StatDateRange range) {
+        return baseQuery(scopeFilter, dsoType, range, STATISTICS_TYPE_VIEW);
+    }
+
+    /**
+     * Build a statistics query as {@link #baseQuery(String, int, StatDateRange)} does, but against
+     * an arbitrary {@code statistics_type} filter rather than the ordinary view-event default -
+     * needed for search-event reports.
+     *
+     * @param scopeFilter        an additional Solr filter query, or null for none
+     * @param dsoType            the DSpace {@link Constants} object type, or -1 for any type
+     * @param range              the date range to count within
+     * @param statisticsTypeFilter the value (or parenthesised OR-list) to filter {@code statistics_type} on
+     * @return a query with zero rows requested, ready for a facet to be attached
+     */
+    protected SolrQuery baseQuery(String scopeFilter, int dsoType, StatDateRange range,
+                                  String statisticsTypeFilter) {
         SolrQuery solrQuery = new SolrQuery("*:*");
         solrQuery.setRows(0);
 
-        solrQuery.addFilterQuery("statistics_type:" + STATISTICS_TYPE_VIEW);
+        solrQuery.addFilterQuery("statistics_type:" + statisticsTypeFilter);
 
         if (dsoType >= 0) {
             solrQuery.addFilterQuery("type:" + dsoType);

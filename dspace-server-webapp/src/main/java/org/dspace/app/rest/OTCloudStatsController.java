@@ -27,8 +27,10 @@ import org.dspace.app.rest.exception.DSpaceBadRequestException;
 import org.dspace.app.rest.model.ItemStatsRest;
 import org.dspace.app.rest.model.MetadataUsageRest;
 import org.dspace.app.rest.model.RestModel;
+import org.dspace.app.rest.model.SearchTermRest;
 import org.dspace.app.rest.model.hateoas.ItemStatsResource;
 import org.dspace.app.rest.model.hateoas.MetadataUsageResource;
+import org.dspace.app.rest.model.hateoas.SearchTermResource;
 import org.dspace.app.rest.utils.ContextUtil;
 import org.dspace.app.rest.utils.DSpaceObjectUtils;
 import org.dspace.authorize.service.AuthorizeService;
@@ -102,7 +104,8 @@ public class OTCloudStatsController implements InitializingBean {
     public void afterPropertiesSet() throws Exception {
         discoverableEndpointsService.register(this, List.of(
                 Link.of("/api/" + RestModel.OTCLOUD_STATS + "/top-items", "top-items"),
-                Link.of("/api/" + RestModel.OTCLOUD_STATS + "/metadata-usage", "metadata-usage")));
+                Link.of("/api/" + RestModel.OTCLOUD_STATS + "/metadata-usage", "metadata-usage"),
+                Link.of("/api/" + RestModel.OTCLOUD_STATS + "/top-searches", "top-searches")));
     }
 
     /**
@@ -213,6 +216,64 @@ public class OTCloudStatsController implements InitializingBean {
             List<ItemStatsRest> stats = toItemStats(context, buckets);
             return new PageImpl<>(stats, pageable, buckets.getTotalBuckets())
                     .map(stat -> (ItemStatsResource) converter.toResource(stat));
+
+        } catch (SQLException | SolrServerException | IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Return a page of the most frequently run search queries within a community, collection or
+     * the whole site, ordered by descending frequency.
+     *
+     * <p>Counts both searches that ended without a clicked result and ones that did, since both
+     * represent a query someone actually ran.</p>
+     *
+     * @param uuid         the community, collection or site to report on
+     * @param startDateStr optional inclusive start of the reporting period
+     * @param endDateStr   optional inclusive end of the reporting period
+     * @param pageable     the requested page
+     * @param request      the current request, used to obtain the DSpace context
+     * @param response     the current response
+     * @return a page of search terms ordered by descending frequency
+     */
+    @GetMapping("/top-searches")
+    public Page<SearchTermResource> getTopSearches(
+            @RequestParam(name = "uuid") UUID uuid,
+            @RequestParam(name = "startDate", required = false) String startDateStr,
+            @RequestParam(name = "endDate", required = false) String endDateStr,
+            Pageable pageable, HttpServletRequest request, HttpServletResponse response) {
+
+        Context context = ContextUtil.obtainContext(request);
+        try {
+            DSpaceObject dso = dspaceObjectUtil.findDSpaceObject(context, uuid);
+            if (!(dso instanceof Community || dso instanceof Collection || dso instanceof Site)) {
+                throw new ResourceNotFoundException(
+                        "No Community, Collection or Site found with uuid: " + uuid);
+            }
+
+            authorizeStatisticsAccess(context, dso);
+
+            StatDateRange range = new StatDateRange(parseDate(startDateStr, "startDate"),
+                                                    parseDate(endDateStr, "endDate"));
+
+            DSpaceObject scope = dso instanceof Site ? null : dso;
+            StatBucketPage buckets = otCloudStatisticsService.topSearches(scope, range,
+                                                                          (int) pageable.getOffset(),
+                                                                          pageable.getPageSize());
+
+            List<SearchTermRest> terms = new ArrayList<>();
+            int rank = (int) pageable.getOffset();
+            for (StatBucket bucket : buckets.getBuckets()) {
+                SearchTermRest rest = new SearchTermRest();
+                rest.setId(uuid + ":" + (rank++));
+                rest.setQuery(bucket.getValue());
+                rest.setCount((int) bucket.getViews());
+                terms.add(rest);
+            }
+
+            return new PageImpl<>(terms, pageable, buckets.getTotalBuckets())
+                    .map(term -> (SearchTermResource) converter.toResource(term));
 
         } catch (SQLException | SolrServerException | IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage(), e);
