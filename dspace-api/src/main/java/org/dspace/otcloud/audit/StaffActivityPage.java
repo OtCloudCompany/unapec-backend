@@ -17,14 +17,18 @@ public class StaffActivityPage {
 
     private final List<StaffActivityRow> rows;
     private final long totalStaff;
+    private final long totalItemsCreated;
 
     /**
-     * @param rows       the rows on the requested page
-     * @param totalStaff the total number of staff members with any recorded activity in the period
+     * @param rows              the rows on the requested page
+     * @param totalStaff        the total number of staff members with any recorded activity in the period
+     * @param totalItemsCreated the total number of distinct items created in the period, across every staff
+     *                          member - not just the ones on this page
      */
-    public StaffActivityPage(List<StaffActivityRow> rows, long totalStaff) {
+    public StaffActivityPage(List<StaffActivityRow> rows, long totalStaff, long totalItemsCreated) {
         this.rows = rows;
         this.totalStaff = totalStaff;
+        this.totalItemsCreated = totalItemsCreated;
     }
 
     public List<StaffActivityRow> getRows() {
@@ -33,5 +37,9 @@ public class StaffActivityPage {
 
     public long getTotalStaff() {
         return totalStaff;
+    }
+
+    public long getTotalItemsCreated() {
+        return totalItemsCreated;
     }
 }

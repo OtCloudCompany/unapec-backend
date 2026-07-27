@@ -100,7 +100,7 @@ public class StaffActivityService {
         throws SolrServerException, IOException {
 
         if (!isAuditEnabled()) {
-            return new StaffActivityPage(Collections.emptyList(), 0);
+            return new StaffActivityPage(Collections.emptyList(), 0, 0);
         }
 
         SolrQuery solrQuery = new SolrQuery("*:*");
@@ -119,7 +119,7 @@ public class StaffActivityService {
 
         QueryResponse response = query(solrQuery);
         if (response == null) {
-            return new StaffActivityPage(Collections.emptyList(), 0);
+            return new StaffActivityPage(Collections.emptyList(), 0, 0);
         }
         return readStaffActivity(response);
     }
@@ -154,7 +154,14 @@ public class StaffActivityService {
         staff.put("sort", "count desc");
         staff.put("facet", subFacets);
 
-        return new ObjectMapper().writeValueAsString(Map.of("staff", staff));
+        // Sibling of "staff", not nested inside it: a per-staff bucket only covers the buckets on
+        // this page, but "how many items were added in total" needs to count every item created in
+        // the period regardless of which page its creator's row falls on.
+        Map<String, Object> facets = new LinkedHashMap<>();
+        facets.put("staff", staff);
+        facets.put("totalItemsCreated", distinctSubjects("event_type:CREATE AND subject_type:ITEM"));
+
+        return new ObjectMapper().writeValueAsString(facets);
     }
 
     /**
@@ -179,19 +186,22 @@ public class StaffActivityService {
      */
     @SuppressWarnings("unchecked")
     private StaffActivityPage readStaffActivity(QueryResponse response) {
-        Object facets = response.getResponse().get("facets");
-        if (!(facets instanceof NamedList)) {
-            return new StaffActivityPage(Collections.emptyList(), 0);
+        Object facetsObj = response.getResponse().get("facets");
+        if (!(facetsObj instanceof NamedList)) {
+            return new StaffActivityPage(Collections.emptyList(), 0, 0);
         }
-        Object staff = ((NamedList<Object>) facets).get("staff");
+        NamedList<Object> facets = (NamedList<Object>) facetsObj;
+        long totalItemsCreated = distinctCount(facets, "totalItemsCreated");
+
+        Object staff = facets.get("staff");
         if (!(staff instanceof NamedList)) {
-            return new StaffActivityPage(Collections.emptyList(), 0);
+            return new StaffActivityPage(Collections.emptyList(), 0, totalItemsCreated);
         }
         NamedList<Object> staffFacet = (NamedList<Object>) staff;
 
         Object rawBuckets = staffFacet.get("buckets");
         if (!(rawBuckets instanceof List)) {
-            return new StaffActivityPage(Collections.emptyList(), 0);
+            return new StaffActivityPage(Collections.emptyList(), 0, totalItemsCreated);
         }
 
         List<StaffActivityRow> rows = new ArrayList<>();
@@ -220,19 +230,20 @@ public class StaffActivityService {
         if (numBuckets instanceof Number) {
             totalStaff = ((Number) numBuckets).longValue();
         }
-        return new StaffActivityPage(rows, totalStaff);
+        return new StaffActivityPage(rows, totalStaff, totalItemsCreated);
     }
 
     /**
-     * Read a named distinct-object count out of a staff bucket.
+     * Read a named distinct-object count out of a staff bucket, or out of the top-level facet
+     * response - both are the same shape, a query facet with a nested {@code unique()} count.
      *
-     * @param bucket the staff bucket
-     * @param name   the sub-facet name
+     * @param facets the NamedList to read the named facet out of
+     * @param name   the facet's name
      * @return the distinct object count, or zero when absent
      */
     @SuppressWarnings("unchecked")
-    private long distinctCount(NamedList<Object> bucket, String name) {
-        Object section = bucket.get(name);
+    private long distinctCount(NamedList<Object> facets, String name) {
+        Object section = facets.get(name);
         if (!(section instanceof NamedList)) {
             return 0;
         }

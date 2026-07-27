@@ -17,6 +17,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -116,6 +117,37 @@ public class OTCloudAuditReportController implements InitializingBean {
             List<StaffActivityRest> rows = toRest(context, activity.getRows());
             return new PageImpl<>(rows, pageable, activity.getTotalStaff())
                     .map(row -> (StaffActivityResource) converter.toResource(row));
+
+        } catch (SQLException | SolrServerException | IOException e) {
+            throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The repository-wide total of items created in a period, across every staff member - not just
+     * whichever page of {@link #getStaffActivity} the caller happens to be viewing. Split out as its
+     * own call rather than folded into that endpoint's response because a Spring Data {@code Page}
+     * body has no room for an extra top-level field.
+     *
+     * @param startDateStr optional inclusive start of the reporting period
+     * @param endDateStr   optional inclusive end of the reporting period
+     * @param request      the current request, used to obtain the DSpace context
+     * @return the total number of distinct items created in the period
+     */
+    @GetMapping("/staff-activity/summary")
+    public Map<String, Long> getStaffActivitySummary(
+            @RequestParam(name = "startDate", required = false) String startDateStr,
+            @RequestParam(name = "endDate", required = false) String endDateStr,
+            HttpServletRequest request) {
+
+        Context context = ContextUtil.obtainContext(request);
+        try {
+            requireAdmin(context);
+
+            StatDateRange range = parseRange(startDateStr, endDateStr);
+            StaffActivityPage activity = staffActivityService.staffActivity(range, 0, 0);
+
+            return Map.of("totalItemsCreated", activity.getTotalItemsCreated());
 
         } catch (SQLException | SolrServerException | IOException e) {
             throw new ResponseStatusException(HttpStatus.INTERNAL_SERVER_ERROR, e.getMessage(), e);
